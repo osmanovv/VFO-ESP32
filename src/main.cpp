@@ -32,11 +32,14 @@
 // encoder steps: depending on your encoder - try 1,2 or 4 to get expected behaviour
 #define ROTARY_ENCODER_STEPS 4
 
-uint32_t currentFrequency = 7055000;
+volatile uint32_t currentFrequency = 7055000;
 uint32_t minFrequency = 100000;
 uint32_t maxFrequency = 160000000;
 
-uint32_t rotaryEncoderAcceleration = 250;
+// predefined steps range: 5Hz, 50Hz, 100Hz, 1kHz, 10kHz
+uint16_t steps[] = {5, 50, 100, 1000, 10000};
+uint8_t stepsLength = (sizeof(steps) / sizeof(uint16_t));
+uint8_t currentStep = 1; // starts with 50Hz, not 5Hz
 
 // Initialize the OLED display using Arduino Wire:
 SSD1306Wire display(SSD1306_ADDRESS, SDA, SCL);
@@ -62,6 +65,25 @@ void drawFreq(uint32_t freq) {
 }
 
 /**
+ * @brief Draws encoder step
+ * 
+ * @param step in Hz
+ */
+void drawStep(uint32_t step) {
+  display.setFont(ArialMT_Plain_16);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  char buffer[10];
+  if (step >= 1000)
+  {
+    display.drawStringf(0, 24, buffer, "%d kHz", step/1000);
+  }
+  else
+  {
+    display.drawStringf(0, 24, buffer, "%d Hz", step);
+  }
+}
+
+/**
  * @brief Draws millis from the start
  * 
  */
@@ -79,13 +101,26 @@ void rotary_onButtonClick()
 {
   static unsigned long lastTimePressed = 0;
   //ignore multiple press in that time milliseconds
-  if (millis() - lastTimePressed < 500)
+  if (millis() - lastTimePressed < 300)
   {
     return;
   }
   lastTimePressed = millis();
 
-  // TODO: change step value
+  // change to the next step value
+  currentStep = (currentStep + 1)  % stepsLength;
+  // reset encoder value as we start count with different step
+  rotaryEncoder.setEncoderValue(0);
+}
+
+/**
+ * @brief Get the current step value from predefined steps in '5Hz, 50Hz, 100Hz, 1kHz, 10kHz'
+ * 
+ * @return uint16_t selected encoder step value from `steps` range {5Hz, 50Hz, 100Hz, 1kHz, 10kHz}
+ */
+uint16_t getEncoderStep()
+{
+  return steps[currentStep];
 }
 
 /**
@@ -97,7 +132,11 @@ void rotary_loop()
   //dont print anything unless value changed
   if (rotaryEncoder.encoderChanged())
   {
-    currentFrequency = rotaryEncoder.readEncoder();
+    currentFrequency += ((rotaryEncoder.readEncoder() >= 0 ? 1: -1) * getEncoderStep());
+
+    // reset encoder value as we only need the direction
+    rotaryEncoder.setEncoderValue(0);
+
     // Serial.print("Value: ");
     // Serial.println(currentFrequency);
   }
@@ -139,9 +178,9 @@ void setup() {
   rotaryEncoder.begin();
   rotaryEncoder.setup(readEncoderISR);
   bool circleValues = false;
-  rotaryEncoder.setBoundaries(minFrequency, maxFrequency, circleValues); //minValue, maxValue, circleValues true|false (when max go to min and vice versa)
-  rotaryEncoder.setEncoderValue(currentFrequency);
-  rotaryEncoder.setAcceleration(rotaryEncoderAcceleration);
+  // encoder changes values from -1 to 1 and we use encoder step value to increment the frequency
+  rotaryEncoder.setBoundaries(-10, 10, circleValues); //minValue, maxValue, circleValues true|false (when max go to min and vice versa)
+  rotaryEncoder.setEncoderValue(0);
 
 }
 
@@ -153,10 +192,9 @@ void loop() {
   display.clear();
 
   display.setContrast(65);
-  //display.setBrightness();
-  //display.setContrast(162, 31, 0);
 
   drawFreq(currentFrequency);
+  drawStep(getEncoderStep());
 
   drawTime();
 
