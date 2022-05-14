@@ -122,6 +122,8 @@ void IRAM_ATTR readEncoderISR()
  * 
  */
 void setup() {
+  // lowering the CPU frequency to reduce power consumption
+  setCpuFrequencyMhz(40);
   Serial.begin(115200);
   Serial.println();
   Serial.println();
