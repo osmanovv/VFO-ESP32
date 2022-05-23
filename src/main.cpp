@@ -20,7 +20,7 @@
 #include <AiEsp32RotaryEncoder.h>
 #include "pins_arduino.h"
 #include "Orbitron_Medium_font.h"
-#include "si5351.h"
+#include <si5351.h>
 
 // OLED I2C address
 #define SSD1306_ADDRESS 0x3C
@@ -196,7 +196,7 @@ void setup() {
   // set ititial frequency @ ~7 dBm
   si5351_SetupCLK0(currentFrequency, SI5351_DRIVE_STRENGTH_4MA);
 
-  // Enable CLK0 and CLK2
+  // Enable CLK0
   si5351_EnableOutputs(1<<0);
 }
 
