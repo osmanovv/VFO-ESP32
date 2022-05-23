@@ -1,5 +1,5 @@
 /**
- * Another VFO System for ESP32-DevKitC  Ver 0.01
+ * Another VFO System for ESP32 Ver 0.01
  * by Vladislav Osmanov / R2BFG
  * 2022-05-08
  * 
@@ -20,6 +20,7 @@
 #include <AiEsp32RotaryEncoder.h>
 #include "pins_arduino.h"
 #include "Orbitron_Medium_font.h"
+#include "si5351.h"
 
 // OLED I2C address
 #define SSD1306_ADDRESS 0x3C
@@ -35,6 +36,13 @@
 volatile uint32_t currentFrequency = 7055000;
 uint32_t minFrequency = 100000;
 uint32_t maxFrequency = 160000000;
+
+// Si5351 correction value
+// measure a 10 MHz signal from one of the clock outputs
+// (in Hz, or better resolution if you can measure it),
+// scale it to parts-per-billion, then use it in the set_correction()
+// method in future use of this particular reference oscillator
+uint32_t frequencyCorrection = 0;
 
 // predefined steps range: 5Hz, 50Hz, 100Hz, 1kHz, 10kHz
 uint16_t steps[] = {5, 50, 100, 1000, 10000};
@@ -139,6 +147,7 @@ void rotary_loop()
 
     // Serial.print("Value: ");
     // Serial.println(currentFrequency);
+    si5351_SetupCLK0(currentFrequency, SI5351_DRIVE_STRENGTH_4MA);
   }
 
   if (rotaryEncoder.isEncoderButtonClicked())
@@ -182,6 +191,13 @@ void setup() {
   rotaryEncoder.setBoundaries(-10, 10, circleValues); //minValue, maxValue, circleValues true|false (when max go to min and vice versa)
   rotaryEncoder.setEncoderValue(0);
 
+  si5351_Init(frequencyCorrection, SDA, SCL);
+  
+  // set ititial frequency @ ~7 dBm
+  si5351_SetupCLK0(currentFrequency, SI5351_DRIVE_STRENGTH_4MA);
+
+  // Enable CLK0 and CLK2
+  si5351_EnableOutputs(1<<0);
 }
 
 /**
