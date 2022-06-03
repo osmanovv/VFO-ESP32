@@ -17,7 +17,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <SSD1306Wire.h>
-#include <AiEsp32RotaryEncoder.h>
 #include "pins_arduino.h"
 #include "Orbitron_Medium_font.h"
 #include <si5351.h>
@@ -30,8 +29,6 @@
 #define ROTARY_ENCODER_B_PIN 33
 #define ROTARY_ENCODER_BUTTON_PIN 25
 #define ROTARY_ENCODER_VCC_PIN -1 // microcontroler VCC
-// encoder steps: depending on your encoder - try 1,2 or 4 to get expected behaviour
-#define ROTARY_ENCODER_STEPS 4
 
 volatile uint32_t currentFrequency = 7055000;
 uint32_t minFrequency = 100000;
@@ -44,21 +41,88 @@ uint32_t maxFrequency = 160000000;
 // method in future use of this particular reference oscillator
 uint32_t frequencyCorrection = 0;
 
-// predefined steps range: 5Hz, 50Hz, 100Hz, 1kHz, 10kHz
-uint16_t steps[] = {5, 50, 100, 1000, 10000};
+// predefined steps range: 500Hz, 1kHz, 10kHz
+uint16_t steps[] = {500, 1000, 10000};
 uint8_t stepsLength = (sizeof(steps) / sizeof(uint16_t));
-uint8_t currentStep = 1; // starts with 50Hz, not 5Hz
+uint8_t currentStep = 0; // starts with 500Hz
 
 // Initialize the OLED display using Arduino Wire:
 SSD1306Wire display(SSD1306_ADDRESS, SDA, SCL);
 
-// Initialize the encoder
-AiEsp32RotaryEncoder rotaryEncoder(
-  ROTARY_ENCODER_A_PIN,
-  ROTARY_ENCODER_B_PIN,
-  ROTARY_ENCODER_BUTTON_PIN,
-  ROTARY_ENCODER_VCC_PIN,
-  ROTARY_ENCODER_STEPS);
+/**
+ * encoder routines
+ */
+
+// we only need direction, not the encoder's counter
+volatile int8_t _encoderDirection = 0;
+volatile bool _rotaryEncoderChanged = false;
+
+/**
+ * @brief Get the current step value from predefined steps in '500Hz, 1kHz, 10kHz'
+ * 
+ * @return uint16_t selected encoder step value from `steps` range {500Hz, 1kHz, 10kHz}
+ */
+uint16_t getEncoderStep()
+{
+  return steps[currentStep];
+}
+
+/**
+ * @brief Handles the rotary encoder button press
+ * 
+ */
+void rotary_onButtonClick()
+{
+  static unsigned long lastTimePressed = 0;
+  //ignore multiple press in that time milliseconds
+  if (millis() - lastTimePressed < 300)
+  {
+    return;
+  }
+  lastTimePressed = millis();
+
+  // change to the next step value
+  currentStep = (currentStep + 1)  % stepsLength;
+
+  // reset encoder value as we start count with different step
+  _encoderDirection = 0;
+}
+
+// /**
+//  * @brief Encoder ISR
+//  * 
+//  */
+void IRAM_ATTR encoderISR(){
+  static unsigned long lastTimeChanged = 0;
+  // eliminate debouncing
+  if (millis() - lastTimeChanged < 150)
+  {
+    return;
+  }
+  lastTimeChanged = millis();
+
+  if(digitalRead(ROTARY_ENCODER_A_PIN) == digitalRead(ROTARY_ENCODER_B_PIN)) {
+    //Clockwise
+    _encoderDirection = 1;
+  } else {
+    //Counter Clockwise
+    _encoderDirection = -1;
+  }
+
+  _rotaryEncoderChanged = true;
+}
+
+/**
+ * @brief Encoder's button ISR
+ * 
+ */
+void IRAM_ATTR encoderButtonISR(){
+  rotary_onButtonClick();
+}
+/**
+ * encoder routines end
+ */
+
 
 /**
  * @brief Draws only the frequncy on the screen
@@ -102,67 +166,21 @@ void drawTime() {
 }
 
 /**
- * @brief Handles the rotary encoder button press
- * 
- */
-void rotary_onButtonClick()
-{
-  static unsigned long lastTimePressed = 0;
-  //ignore multiple press in that time milliseconds
-  if (millis() - lastTimePressed < 300)
-  {
-    return;
-  }
-  lastTimePressed = millis();
-
-  // change to the next step value
-  currentStep = (currentStep + 1)  % stepsLength;
-  // reset encoder value as we start count with different step
-  rotaryEncoder.setEncoderValue(0);
-}
-
-/**
- * @brief Get the current step value from predefined steps in '5Hz, 50Hz, 100Hz, 1kHz, 10kHz'
- * 
- * @return uint16_t selected encoder step value from `steps` range {5Hz, 50Hz, 100Hz, 1kHz, 10kHz}
- */
-uint16_t getEncoderStep()
-{
-  return steps[currentStep];
-}
-
-/**
- * @brief Reads rotary encoder value
+ * @brief Reads rotary encoder direction and set up Si5351 changed frequency
  * 
  */
 void rotary_loop()
 {
-  //dont print anything unless value changed
-  if (rotaryEncoder.encoderChanged())
+  if (_rotaryEncoderChanged)
   {
-    currentFrequency += ((rotaryEncoder.readEncoder() >= 0 ? 1: -1) * getEncoderStep());
+    _rotaryEncoderChanged = false;
 
-    // reset encoder value as we only need the direction
-    rotaryEncoder.setEncoderValue(0);
+    currentFrequency += (_encoderDirection * getEncoderStep());
 
-    // Serial.print("Value: ");
-    // Serial.println(currentFrequency);
+    Serial.print("Value: ");
+    Serial.println(currentFrequency);
     si5351_SetupCLK0(currentFrequency, SI5351_DRIVE_STRENGTH_4MA);
   }
-
-  if (rotaryEncoder.isEncoderButtonClicked())
-  {
-    rotary_onButtonClick();
-  }
-}
-
-/**
- * @brief Encoder ISR
- * 
- */
-void IRAM_ATTR readEncoderISR()
-{
-  rotaryEncoder.readEncoder_ISR();
 }
 
 /**
@@ -176,21 +194,22 @@ void setup() {
   Serial.println();
   Serial.println();
 
-
   // Initialising the UI will init the display too.
   display.init();
 
   display.flipScreenVertically();
   display.setFont(ArialMT_Plain_10);
   
-  //we must initialize rotary encoder
-  rotaryEncoder.begin();
-  rotaryEncoder.setup(readEncoderISR);
-  bool circleValues = false;
-  // encoder changes values from -1 to 1 and we use encoder step value to increment the frequency
-  rotaryEncoder.setBoundaries(-10, 10, circleValues); //minValue, maxValue, circleValues true|false (when max go to min and vice versa)
-  rotaryEncoder.setEncoderValue(0);
+  // encoder initialization
+	pinMode(ROTARY_ENCODER_A_PIN, INPUT_PULLUP);
+	pinMode(ROTARY_ENCODER_B_PIN, INPUT_PULLUP);
+  attachInterrupt(ROTARY_ENCODER_A_PIN, encoderISR, CHANGE);
+  
+  // encoder's button initialization
+  pinMode(ROTARY_ENCODER_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(ROTARY_ENCODER_BUTTON_PIN, encoderButtonISR, FALLING);
 
+  // setup default frequency
   si5351_Init(frequencyCorrection, SDA, SCL);
   
   // set ititial frequency @ ~7 dBm
